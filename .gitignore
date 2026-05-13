@@ -9,10 +9,13 @@ ENV/
 
 # Project Specific
 hf_cache/
-checkpoints/
 data/
-*.pth
 *.log
+
+# Allow the model
+!checkpoints/
+!checkpoints/*.pth
+!*.pth
 
 # OS
 .DS_Store
