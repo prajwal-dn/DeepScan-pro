@@ -38,41 +38,47 @@ print(f"[INFO] Running on: {CFG.DEVICE}")
 # ── FACE EXTRACTOR ────────────────────────────────────────────
 class FaceExtractor:
     def __init__(self):
-        from facenet_pytorch import MTCNN
-        self.detector = MTCNN(
-            image_size=CFG.IMG_SIZE,
-            margin=CFG.FACE_MARGIN,
-            keep_all=False,
-            post_process=False,
-            device=CFG.DEVICE
+        import mediapipe as mp
+        self.mp_face_detection = mp.solutions.face_detection
+        self.detector = self.mp_face_detection.FaceDetection(
+            model_selection=1, # 1 for far-range, 0 for short-range
+            min_detection_confidence=0.5
         )
 
     def from_image(self, img_bgr):
         try:
             img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
-            face = self.detector(img_rgb)
-            if face is None: return None
-            return face.permute(1, 2, 0).numpy().astype(np.uint8)
+            results = self.detector.process(img_rgb)
+            if not results.detections: return None
+            
+            # Get the first face
+            detection = results.detections[0]
+            bbox = detection.location_data.relative_bounding_box
+            ih, iw, _ = img_rgb.shape
+            
+            x, y, w, h = int(bbox.xmin * iw), int(bbox.ymin * ih), \
+                         int(bbox.width * iw), int(bbox.height * ih)
+            
+            # Add margin
+            m = CFG.FACE_MARGIN
+            face = img_rgb[max(0, y-m):min(ih, y+h+m), max(0, x-m):min(iw, x+w+m)]
+            return cv2.resize(face, (CFG.IMG_SIZE, CFG.IMG_SIZE))
         except:
             return None
 
-    def from_video(self, video_path, n_frames=1):
+    def from_video(self, video_path, n_frames=10):
         faces = []
         try:
-            import av
-            container = av.open(video_path)
-            stream = container.streams.video[0]
-            total = stream.frames or 0
+            cap = cv2.VideoCapture(video_path)
+            total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
             step = max(1, total // n_frames)
-            i = 0
-            for frame in container.decode(video=0):
-                if i % step == 0:
-                    img = frame.to_ndarray(format="bgr24")
-                    face = self.from_image(img)
-                    if face is not None: faces.append(face)
-                    if len(faces) >= n_frames: break
-                i += 1
-            container.close()
+            for i in range(n_frames):
+                cap.set(cv2.CAP_PROP_POS_FRAMES, i * step)
+                ret, frame = cap.read()
+                if not ret: break
+                face = self.from_image(frame)
+                if face is not None: faces.append(face)
+            cap.release()
         except:
             pass
         return faces
@@ -333,11 +339,7 @@ class DeepfakeInference:
             face = self.face_ext.from_image(img)
             
             if face is None:
-                # Fallback to analyzing the full image if no face is found
-                if img is not None:
-                    face = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-                else:
-                    return {"error": "Could not read image", "type": "image"} 
+                return {"error": "NO_FACE_DETECTED: Please provide a clear, forward-facing photo for analysis.", "type": "image"} 
                 
             prob, fft_score = self._predict_face(face)
             pred_class = int(np.argmax(prob))
