@@ -38,36 +38,38 @@ print(f"[INFO] Running on: {CFG.DEVICE}")
 # ── FACE EXTRACTOR ────────────────────────────────────────────
 class FaceExtractor:
     def __init__(self):
-        import mediapipe as mp
-        try:
-            self.mp_face_detection = mp.solutions.face_detection
-        except AttributeError:
-            import mediapipe.solutions.face_detection as mps_fd
-            self.mp_face_detection = mps_fd
-            
-        self.detector = self.mp_face_detection.FaceDetection(
-            model_selection=1, # 1 for far-range, 0 for short-range
-            min_detection_confidence=0.5
+        from facenet_pytorch import MTCNN
+        self.mtcnn = MTCNN(
+            image_size=CFG.IMG_SIZE,
+            margin=CFG.FACE_MARGIN,
+            keep_all=False,
+            post_process=False,
+            device=CFG.DEVICE
         )
+        # Load OpenCV's built-in side-view (profile) detector
+        self.side_detector = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_profileface.xml')
 
     def from_image(self, img_bgr):
         try:
             img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
-            results = self.detector.process(img_rgb)
-            if not results.detections: return None
             
-            # Get the first face
-            detection = results.detections[0]
-            bbox = detection.location_data.relative_bounding_box
-            ih, iw, _ = img_rgb.shape
+            # 1. Try MTCNN first (Best for front/slight angles)
+            face = self.mtcnn(img_rgb)
+            if face is not None:
+                return face.permute(1, 2, 0).numpy().astype(np.uint8)
             
-            x, y, w, h = int(bbox.xmin * iw), int(bbox.ymin * ih), \
-                         int(bbox.width * iw), int(bbox.height * ih)
+            # 2. Fallback to OpenCV Profile detector (Best for sharp side-views)
+            gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
+            side_faces = self.side_detector.detectMultiScale(gray, 1.1, 5)
             
-            # Add margin
-            m = CFG.FACE_MARGIN
-            face = img_rgb[max(0, y-m):min(ih, y+h+m), max(0, x-m):min(iw, x+w+m)]
-            return cv2.resize(face, (CFG.IMG_SIZE, CFG.IMG_SIZE))
+            if len(side_faces) > 0:
+                x, y, w, h = side_faces[0]
+                m = CFG.FACE_MARGIN
+                face_crop = img_rgb[max(0, y-m):min(img_rgb.shape[0], y+h+m), 
+                                    max(0, x-m):min(img_rgb.shape[1], x+w+m)]
+                return cv2.resize(face_crop, (CFG.IMG_SIZE, CFG.IMG_SIZE))
+                
+            return None
         except:
             return None
 
@@ -84,8 +86,7 @@ class FaceExtractor:
                 face = self.from_image(frame)
                 if face is not None: faces.append(face)
             cap.release()
-        except:
-            pass
+        except: pass
         return faces
 
 

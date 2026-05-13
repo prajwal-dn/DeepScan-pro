@@ -12,4 +12,3 @@ numpy
 tqdm
 transformers
 pillow
-mediapipe
