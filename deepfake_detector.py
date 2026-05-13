@@ -39,7 +39,12 @@ print(f"[INFO] Running on: {CFG.DEVICE}")
 class FaceExtractor:
     def __init__(self):
         import mediapipe as mp
-        self.mp_face_detection = mp.solutions.face_detection
+        try:
+            self.mp_face_detection = mp.solutions.face_detection
+        except AttributeError:
+            import mediapipe.solutions.face_detection as mps_fd
+            self.mp_face_detection = mps_fd
+            
         self.detector = self.mp_face_detection.FaceDetection(
             model_selection=1, # 1 for far-range, 0 for short-range
             min_detection_confidence=0.5
