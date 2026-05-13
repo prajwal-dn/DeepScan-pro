@@ -1,0 +1,14 @@
+torch
+torchvision
+timm
+opencv-python-headless
+albumentations
+facenet-pytorch
+av
+flask
+flask-cors
+scikit-learn
+numpy
+tqdm
+transformers
+pillow

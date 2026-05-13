@@ -1,0 +1,405 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>DeepScan Pro — AI Forensic Analysis</title>
+<link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet"/>
+<style>
+:root {
+    --bg: #030408;
+    --surface: rgba(13, 15, 26, 0.7);
+    --surface2: rgba(22, 24, 40, 0.5);
+    --border: rgba(255, 255, 255, 0.08);
+    --accent: #6366f1;
+    --accent-glow: rgba(99, 102, 241, 0.4);
+    --real: #10b981;
+    --fake: #ef4444;
+    --ai: #a855f7;
+    --text: #f8fafc;
+    --muted: #94a3b8;
+    --mono: 'JetBrains Mono', monospace;
+    --sans: 'Outfit', sans-serif;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { 
+    font-family: var(--sans); 
+    background: var(--bg); 
+    color: var(--text); 
+    min-height: 100vh;
+    overflow-x: hidden;
+}
+
+/* Dynamic Background */
+.bg-mesh {
+    position: fixed;
+    top: 0; left: 0; width: 100%; height: 100%;
+    background: 
+        radial-gradient(circle at 0% 0%, rgba(99, 102, 241, 0.15) 0%, transparent 50%),
+        radial-gradient(circle at 100% 100%, rgba(168, 85, 247, 0.15) 0%, transparent 50%);
+    z-index: -1;
+}
+
+.wrap { position: relative; z-index: 1; max-width: 900px; margin: 0 auto; padding: 40px 24px; }
+
+header { display: flex; align-items: center; gap: 16px; margin-bottom: 60px; }
+.logo-mark { 
+    width: 50px; height: 50px; border-radius: 14px; 
+    background: linear-gradient(135deg, var(--accent), var(--ai));
+    display: grid; place-items: center; font-size: 24px;
+    box-shadow: 0 0 40px var(--accent-glow);
+}
+.logo-text h1 { font-size: 1.8rem; font-weight: 800; letter-spacing: -0.02em; }
+.logo-text p { font-size: 0.75rem; color: var(--muted); font-family: var(--mono); text-transform: uppercase; margin-top: 2px; }
+
+.hero { text-align: center; margin-bottom: 60px; }
+.hero h2 { font-size: clamp(2.5rem, 6vw, 4rem); font-weight: 800; margin-bottom: 20px; line-height: 1.1; }
+.hero h2 span { background: linear-gradient(to right, #818cf8, #c084fc); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+.hero p { color: var(--muted); font-size: 1.1rem; max-width: 600px; margin: 0 auto; }
+
+/* Premium Card with Glassmorphism */
+.card { 
+    background: var(--surface); 
+    backdrop-filter: blur(20px); 
+    border: 1px solid var(--border); 
+    border-radius: 32px; 
+    padding: 40px;
+    box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
+    transition: box-shadow 0.5s ease;
+}
+
+#dropzone {
+    border: 2px dashed rgba(255,255,255,0.1);
+    border-radius: 24px;
+    padding: 80px 40px;
+    text-align: center;
+    cursor: pointer;
+    background: rgba(255,255,255,0.02);
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+#dropzone:hover { border-color: var(--accent); background: rgba(99, 102, 241, 0.05); transform: scale(1.01); }
+
+.drop-icon { font-size: 48px; margin-bottom: 24px; opacity: 0.8; }
+.drop-title { font-size: 1.4rem; font-weight: 600; margin-bottom: 8px; }
+.drop-sub { color: var(--muted); font-size: 0.95rem; }
+.drop-sub strong { color: var(--accent); }
+
+/* Preview & Scanning Animation */
+#preview-wrap {
+    display: none;
+    position: relative;
+    margin-top: 30px;
+    border-radius: 20px;
+    overflow: hidden;
+    border: 1px solid var(--border);
+    background: #000;
+}
+#preview-wrap img, #preview-wrap video { width: 100%; max-height: 450px; object-fit: contain; display: block; }
+
+.scanner-overlay {
+    position: absolute;
+    top: 0; left: 0; width: 100%; height: 100%;
+    background: rgba(99, 102, 241, 0.1);
+    display: none;
+    pointer-events: none;
+}
+.scan-line {
+    position: absolute;
+    top: 0; left: 0; width: 100%; height: 4px;
+    background: linear-gradient(to bottom, transparent, var(--accent), transparent);
+    box-shadow: 0 0 20px var(--accent);
+    animation: scan 2s linear infinite;
+}
+.face-box {
+    position: absolute;
+    border: 2px solid var(--accent);
+    box-shadow: 0 0 15px var(--accent);
+    border-radius: 4px;
+    display: none;
+    transition: all 0.3s ease;
+}
+.face-box::before {
+    content: 'DETECTING...';
+    position: absolute;
+    top: -25px; left: 0;
+    font-size: 10px; font-family: var(--mono); color: var(--accent);
+    background: rgba(0,0,0,0.8); padding: 2px 6px;
+}
+
+@keyframes scan {
+    0% { top: 0; }
+    100% { top: 100%; }
+}
+
+#analyze-btn {
+    display: none; width: 100%; margin-top: 24px;
+    padding: 20px; border-radius: 16px; border: none;
+    background: linear-gradient(135deg, var(--accent), var(--ai));
+    color: white; font-size: 1.1rem; font-weight: 600;
+    cursor: pointer; transition: all 0.3s ease;
+    box-shadow: 0 10px 25px -5px var(--accent-glow);
+}
+#analyze-btn:hover { transform: translateY(-2px); box-shadow: 0 20px 30px -10px var(--accent-glow); }
+
+#loading { display: none; padding: 40px; text-align: center; }
+.loader-ui { width: 80px; height: 80px; margin: 0 auto 24px; position: relative; }
+.loader-ui div {
+    position: absolute; width: 100%; height: 100%;
+    border: 4px solid transparent; border-top-color: var(--accent);
+    border-radius: 50%; animation: spin 1.2s cubic-bezier(0.5, 0, 0.5, 1) infinite;
+}
+.loader-ui div:nth-child(2) { border-top-color: var(--ai); animation-delay: -0.3s; }
+@keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+
+/* Results Section */
+#result { display: none; margin-top: 40px; animation: fadeIn 0.8s ease forwards; }
+@keyframes fadeIn { from { opacity: 0; transform: translateY(20px); } to { opacity: 1; transform: translateY(0); } }
+
+.verdict-header {
+    padding: 30px; border-radius: 24px; display: flex; align-items: center; gap: 24px;
+    margin-bottom: 24px; border: 1px solid var(--border);
+}
+.v-icon { font-size: 3rem; }
+.v-text .label { font-family: var(--mono); font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.1em; opacity: 0.7; }
+.v-text .title { font-size: 2.2rem; font-weight: 800; margin: 4px 0; }
+
+.stats-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin-bottom: 24px; }
+.stat-card { background: var(--surface2); padding: 20px; border-radius: 20px; border: 1px solid var(--border); }
+.stat-card .label { font-size: 0.7rem; font-family: var(--mono); color: var(--muted); margin-bottom: 12px; }
+.stat-card .val { font-size: 1.5rem; font-weight: 700; margin-bottom: 12px; }
+.stat-bar-bg { height: 6px; background: rgba(255,255,255,0.05); border-radius: 10px; overflow: hidden; }
+.stat-bar { height: 100%; border-radius: 10px; width: 0; transition: width 1.5s cubic-bezier(0.34, 1.56, 0.64, 1); }
+
+.technical-breakdown {
+    background: rgba(0,0,0,0.2); border-radius: 24px; padding: 24px;
+    display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px;
+}
+.metric { text-align: center; }
+.metric-val { font-family: var(--mono); font-size: 1.2rem; font-weight: 600; display: block; margin-bottom: 4px; }
+.metric-label { font-size: 0.7rem; color: var(--muted); text-transform: uppercase; }
+
+#reset-btn {
+    display: none; width: 100%; margin-top: 24px; padding: 18px;
+    border-radius: 16px; border: 1px solid var(--border); background: transparent;
+    color: var(--muted); font-weight: 600; cursor: pointer; transition: all 0.3s;
+}
+#reset-btn:hover { color: white; background: rgba(255,255,255,0.05); }
+
+@media (max-width: 768px) {
+    .stats-grid, .technical-breakdown { grid-template-columns: 1fr; }
+}
+</style>
+</head>
+<body>
+<div class="bg-mesh"></div>
+<div class="wrap">
+    <header>
+        <div class="logo-mark">⚡</div>
+        <div class="logo-text">
+            <h1>Deep<span>Scan</span> PRO</h1>
+            <p>Neural Artifact Analysis v2.0</p>
+        </div>
+    </header>
+
+    <section class="hero">
+        <h2>Unmask <span>Synthetic</span> Media</h2>
+        <p>Enterprise-grade forensic analysis powered by EfficientNet-B3. Detecting face-swaps, GANs, and AI-generated content.</p>
+    </section>
+
+    <div class="card" id="main-card">
+        <div id="dropzone" ondragover="event.preventDefault();this.classList.add('drag-over')" ondragleave="this.classList.remove('drag-over')" ondrop="onDrop(event)">
+            <div class="drop-icon">🚀</div>
+            <p class="drop-title">Initialize Scan</p>
+            <p class="drop-sub">Drag file or <strong>browse local storage</strong></p>
+        </div>
+        <input type="file" id="file-input" accept="image/*,video/*" style="display:none"/>
+
+        <div id="preview-wrap">
+            <img id="preview-img" style="display:none"/>
+            <video id="preview-vid" style="display:none" muted loop></video>
+            <div class="scanner-overlay" id="scanner">
+                <div class="scan-line"></div>
+                <div class="face-box" id="face-box"></div>
+            </div>
+        </div>
+
+        <button id="analyze-btn">START DEEP SCAN</button>
+
+        <div id="loading">
+            <div class="loader-ui"><div></div><div></div></div>
+            <p class="loading-text" id="status-text">Processing image data...</p>
+        </div>
+
+        <div id="result">
+            <div class="verdict-header" id="v-header">
+                <div class="v-icon" id="v-icon"></div>
+                <div class="v-text">
+                    <div class="label" id="v-label">ANALYSIS VERDICT</div>
+                    <div class="title" id="v-title">—</div>
+                    <div class="v-sub" id="v-sub">0% Confidence</div>
+                </div>
+            </div>
+
+            <div class="stats-grid">
+                <div class="stat-card">
+                    <div class="label">REAL PHOTO</div>
+                    <div class="val" id="real-pct">0%</div>
+                    <div class="stat-bar-bg"><div class="stat-bar" style="background:var(--real)" id="real-bar"></div></div>
+                </div>
+                <div class="stat-card">
+                    <div class="label">DEEPFAKE</div>
+                    <div class="val" id="fake-pct">0%</div>
+                    <div class="stat-bar-bg"><div class="stat-bar" style="background:var(--fake)" id="fake-bar"></div></div>
+                </div>
+                <div class="stat-card">
+                    <div class="label">AI GENERATED</div>
+                    <div class="val" id="ai-pct">0%</div>
+                    <div class="stat-bar-bg"><div class="stat-bar" style="background:var(--ai)" id="ai-bar"></div></div>
+                </div>
+            </div>
+
+            <div class="technical-breakdown">
+                <div class="metric">
+                    <span class="metric-val" id="m-texture">0.0</span>
+                    <span class="metric-label">Texture Score</span>
+                </div>
+                <div class="metric">
+                    <span class="metric-val" id="m-lighting">0.0</span>
+                    <span class="metric-label">Lighting Auth</span>
+                </div>
+                <div class="metric">
+                    <span class="metric-val" id="m-artifacts">0.0</span>
+                    <span class="metric-label">Artifact Density</span>
+                </div>
+            </div>
+        </div>
+
+        <button id="reset-btn">SCAN NEW FILE</button>
+    </div>
+</div>
+
+<script>
+let currentFile = null;
+
+document.addEventListener('DOMContentLoaded', () => {
+    document.getElementById('browse-btn').addEventListener('click', e => {
+        e.stopPropagation(); document.getElementById('file-input').click();
+    });
+    document.getElementById('dropzone').addEventListener('click', () => document.getElementById('file-input').click());
+    document.getElementById('file-input').addEventListener('change', e => {
+        if (e.target.files && e.target.files[0]) handleFile(e.target.files[0]);
+    });
+    document.getElementById('analyze-btn').addEventListener('click', analyze);
+    document.getElementById('reset-btn').addEventListener('click', resetAll);
+});
+
+function handleFile(file) {
+    currentFile = file;
+    const url = URL.createObjectURL(file);
+    const isVid = file.type.startsWith('video/');
+    
+    document.getElementById('preview-vid').style.display = isVid ? 'block' : 'none';
+    document.getElementById('preview-img').style.display = isVid ? 'none' : 'block';
+    if(isVid) document.getElementById('preview-vid').src = url;
+    else document.getElementById('preview-img').src = url;
+
+    document.getElementById('preview-wrap').style.display = 'block';
+    document.getElementById('analyze-btn').style.display = 'block';
+    document.getElementById('result').style.display = 'none';
+    document.getElementById('dropzone').style.display = 'none';
+}
+
+async function analyze() {
+    if (!currentFile) return;
+    
+    // UI Scanning Phase
+    document.getElementById('analyze-btn').style.display = 'none';
+    document.getElementById('loading').style.display = 'block';
+    document.getElementById('scanner').style.display = 'block';
+    
+    const status = document.getElementById('status-text');
+    status.innerText = "Extracting biological landmarks...";
+    
+    // Simulate "Scanning" for the first 1.5 seconds regardless of API speed
+    const apiPromise = fetch('/predict', { method: 'POST', body: (() => {
+        const fd = new FormData(); fd.append('file', currentFile); return fd;
+    })() });
+
+    await new Promise(r => setTimeout(r, 800));
+    status.innerText = "Analyzing pixel frequency distribution...";
+    
+    // Show "Detected" box randomly to look cool
+    const faceBox = document.getElementById('face-box');
+    faceBox.style.display = 'block';
+    faceBox.style.top = '20%'; faceBox.style.left = '30%'; 
+    faceBox.style.width = '40%'; faceBox.style.height = '50%';
+
+    await new Promise(r => setTimeout(r, 1200));
+    status.innerText = "Finalizing neural classification...";
+
+    try {
+        const response = await apiPromise;
+        const d = await response.json();
+        
+        document.getElementById('loading').style.display = 'none';
+        document.getElementById('scanner').style.display = 'none';
+        
+        if(d.error) throw new Error(d.error);
+
+        // Styling the card based on result
+        const card = document.getElementById('main-card');
+        if(d.verdict === 'REAL') card.style.boxShadow = '0 0 50px rgba(16, 185, 129, 0.2)';
+        else if(d.verdict === 'UNKNOWN') card.style.boxShadow = '0 0 50px rgba(245, 158, 11, 0.2)';
+        else card.style.boxShadow = '0 0 50px rgba(239, 68, 68, 0.2)';
+
+        // Populate Result
+        document.getElementById('v-icon').innerText = d.verdict === 'REAL' ? '🛡️' : (d.verdict === 'UNKNOWN' ? '❓' : '🚨');
+        document.getElementById('v-title').innerText = d.verdict.replace('_', ' ');
+        document.getElementById('v-sub').innerText = `${d.confidence}% Certainty`;
+        
+        document.getElementById('real-pct').innerText = d.probs.real.toFixed(1) + '%';
+        document.getElementById('fake-pct').innerText = d.probs.deepfake.toFixed(1) + '%';
+        document.getElementById('ai-pct').innerText = d.probs.ai_generated.toFixed(1) + '%';
+
+        document.getElementById('m-texture').innerText = d.metrics.texture.toFixed(1);
+        document.getElementById('m-lighting').innerText = d.metrics.lighting.toFixed(1) + '%';
+        document.getElementById('m-artifacts').innerText = d.metrics.artifacts.toFixed(1);
+
+        document.getElementById('result').style.display = 'block';
+        document.getElementById('reset-btn').style.display = 'block';
+
+        setTimeout(() => {
+            document.getElementById('real-bar').style.width = d.probs.real + '%';
+            document.getElementById('fake-bar').style.width = d.probs.deepfake + '%';
+            document.getElementById('ai-bar').style.width = d.probs.ai_generated + '%';
+        }, 100);
+
+    } catch (e) {
+        alert("System Error: " + e.message);
+        resetAll();
+    }
+}
+
+function resetAll() {
+    currentFile = null;
+    document.getElementById('dropzone').style.display = 'block';
+    document.getElementById('preview-wrap').style.display = 'none';
+    document.getElementById('result').style.display = 'none';
+    document.getElementById('analyze-btn').style.display = 'none';
+    document.getElementById('loading').style.display = 'none';
+    document.getElementById('reset-btn').style.display = 'none';
+    document.getElementById('main-card').style.boxShadow = '';
+    document.getElementById('real-bar').style.width = '0';
+    document.getElementById('fake-bar').style.width = '0';
+    document.getElementById('ai-bar').style.width = '0';
+}
+
+function onDrop(e) {
+    e.preventDefault();
+    document.getElementById('dropzone').classList.remove('drag-over');
+    if (e.dataTransfer.files && e.dataTransfer.files[0]) handleFile(e.dataTransfer.files[0]);
+}
+</script>
+</body>
+</html>
