@@ -30,6 +30,9 @@ class CFG:
     FRAMES_PER_VIDEO  = 10  # Increased for higher video reliability
     FACE_MARGIN       = 30
     DEVICE            = "cuda" if torch.cuda.is_available() else "cpu"
+    AUX_AI_MODEL_ID   = "prithivMLmods/AI-vs-Deepfake-vs-Real-Siglip2"
+    AUX_AI_MODEL      = "./hf_cache/hub/models--prithivMLmods--AI-vs-Deepfake-vs-Real-Siglip2/snapshots/4b0c6081b9c9d890cf0251d7a5e736adc10f2d49"
+    AUX_AI_THRESHOLD  = 0.60
 
 os.makedirs(CFG.CKPT_DIR, exist_ok=True)
 print(f"[INFO] Running on: {CFG.DEVICE}")
@@ -103,6 +106,53 @@ class DeepfakeDetector(nn.Module):
 
     def forward(self, x):
         return self.head(self.backbone(x))
+
+
+class AuxiliaryAIDetector:
+    def __init__(self, model_path=CFG.AUX_AI_MODEL, model_id=CFG.AUX_AI_MODEL_ID, device=CFG.DEVICE):
+        self.enabled = False
+        self.device = device
+        self.model = None
+        self.processor = None
+
+        try:
+            from transformers import AutoModelForImageClassification, SiglipImageProcessor
+            model_source = model_path if os.path.exists(model_path) else model_id
+            local_only = os.path.exists(model_path)
+            self.processor = SiglipImageProcessor(size={"height": 224, "width": 224})
+            self.model = AutoModelForImageClassification.from_pretrained(
+                model_source,
+                local_files_only=local_only,
+            ).to(self.device)
+            self.model.eval()
+            self.enabled = True
+            print("[INFO] Auxiliary AI detector loaded.")
+        except Exception as e:
+            print(f"[WARN] Auxiliary AI detector disabled: {e}")
+
+    def predict_rgb(self, image_rgb):
+        if not self.enabled:
+            return None
+
+        try:
+            from PIL import Image
+            pil_img = Image.fromarray(image_rgb.astype(np.uint8))
+            inputs = self.processor(images=pil_img, return_tensors="pt")
+            inputs = {k: v.to(self.device) for k, v in inputs.items()}
+            with torch.no_grad():
+                logits = self.model(**inputs).logits
+                probs = torch.softmax(logits, dim=1).cpu().numpy()[0]
+
+            id2label = self.model.config.id2label
+            scores = {id2label[i].lower(): float(probs[i]) for i in range(len(probs))}
+            return np.array([
+                scores.get("real", 0.0),
+                scores.get("deepfake", 0.0),
+                scores.get("ai", scores.get("ai_generated", 0.0)),
+            ], dtype=np.float32)
+        except Exception as e:
+            print(f"[WARN] Auxiliary AI prediction failed: {e}")
+            return None
 
 
 # ── DATASET (CHOICE B: ON-THE-FLY) ─────────────────────────────
@@ -255,6 +305,7 @@ class DeepfakeInference:
     def __init__(self):
         self.device   = CFG.DEVICE
         self.face_ext = FaceExtractor()
+        self.aux_ai   = AuxiliaryAIDetector(device=self.device)
         self.tf = transforms.Compose([
             transforms.ToPILImage(), transforms.Resize((CFG.IMG_SIZE, CFG.IMG_SIZE)),
             transforms.ToTensor(), transforms.Normalize((0.485,0.456,0.406),(0.229,0.224,0.225)),
@@ -295,6 +346,34 @@ class DeepfakeInference:
         
         return probs, high_freq_power, texture_score
 
+    def _merge_auxiliary_ai(self, base_probs, aux_probs):
+        if aux_probs is None:
+            return base_probs, None
+
+        aux_sum = float(np.sum(aux_probs))
+        if aux_sum <= 0:
+            return base_probs, None
+
+        aux_probs = aux_probs / aux_sum
+        merged = (base_probs * 0.55) + (aux_probs * 0.45)
+
+        base_pred = int(np.argmax(base_probs))
+        aux_pred = int(np.argmax(aux_probs))
+        aux_ai = float(aux_probs[2])
+
+        if aux_pred == 2 and aux_ai >= CFG.AUX_AI_THRESHOLD:
+            deepfake_is_strong = base_pred == 1 and float(base_probs[1]) >= 0.75
+            if not deepfake_is_strong:
+                merged[2] = max(merged[2], aux_ai)
+
+        merged = merged / np.sum(merged)
+        debug = {
+            "real": round(float(aux_probs[0]) * 100, 2),
+            "deepfake": round(float(aux_probs[1]) * 100, 2),
+            "ai_generated": round(float(aux_probs[2]) * 100, 2),
+        }
+        return merged, debug
+
     def predict(self, path):
         ext = Path(path).suffix.lower()
         CLASSES = ["REAL", "DEEPFAKE", "AI_GENERATED"]
@@ -320,6 +399,10 @@ class DeepfakeInference:
             fft_scores = [r[1] for r in results]
             
             avg_prob = np.mean(probs, axis=0)
+            aux_results = [self.aux_ai.predict_rgb(f) for f in faces]
+            aux_results = [p for p in aux_results if p is not None]
+            aux_prob = np.mean(aux_results, axis=0) if aux_results else None
+            avg_prob, aux_debug = self._merge_auxiliary_ai(avg_prob, aux_prob)
             avg_fft = np.mean(fft_scores)
             
             pred_class = int(np.argmax(avg_prob))
@@ -345,17 +428,32 @@ class DeepfakeInference:
                     "ai_generated": round(float(avg_prob[2]) * 100, 2),
                 },
                 "metrics": metrics,
+                "auxiliary_ai": aux_debug,
                 "type": "video",
                 "frames_analyzed": len(probs)
             }
         else:
             img = cv2.imread(path)
+            if img is None:
+                return {"error": "Could not read image file", "type": "image"}
+
+            img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
             face = self.face_ext.from_image(img)
-            
-            if face is None:
-                return {"error": "NO_FACE_DETECTED: Please provide a clear, forward-facing photo for analysis.", "type": "image"} 
-                
-            prob, fft_score, tex_score = self._predict_face(face)
+
+            # Kaggle training uses whole images, while local face/deepfake training can use crops.
+            # Evaluate both when a face exists so AI-generation cues outside the crop are not discarded.
+            candidates = [img_rgb]
+            if face is not None:
+                candidates.append(face)
+
+            results = [self._predict_face(candidate) for candidate in candidates]
+            probs = [r[0] for r in results]
+            fft_scores = [r[1] for r in results]
+            tex_scores = [r[2] for r in results]
+
+            prob = np.mean(probs, axis=0)
+            fft_score = max(fft_scores)
+            tex_score = float(np.mean(tex_scores))
             
             # HYBRID DECISION LOGIC
             # If the CNN is "unsure" or predicts Real but FFT artifacts are HIGH, 
@@ -371,6 +469,9 @@ class DeepfakeInference:
             if np.argmax(prob) == 0 and fft_score > FFT_THRESHOLD:
                 final_probs[2] += 0.5 # Strong boost to AI_GENERATED
                 final_probs = final_probs / np.sum(final_probs) 
+
+            aux_prob = self.aux_ai.predict_rgb(img_rgb)
+            final_probs, aux_debug = self._merge_auxiliary_ai(final_probs, aux_prob)
             
             pred_class = int(np.argmax(final_probs))
             confidence = round(float(final_probs[pred_class]) * 100, 2)
@@ -396,6 +497,7 @@ class DeepfakeInference:
                 },
                 "metrics": metrics,
                 "type": "image",
+                "auxiliary_ai": aux_debug,
                 "forensic_debug": {"fft": round(float(fft_score), 2), "tex": round(float(tex_score), 2)}
             }
 
@@ -429,7 +531,7 @@ def run_api():
                     os.remove(tmp.name)
                 except:
                     pass
-    print("🚀 API is live at http://127.0.0.1:7860")
+    print("API is live at http://127.0.0.1:7860")
     app.run(host="0.0.0.0", port=7860)
 
 if __name__ == "__main__":
