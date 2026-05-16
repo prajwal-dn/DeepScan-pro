@@ -17,7 +17,7 @@ import tempfile
 class CFG:
     
     DATA_ROOT         = "./data"
-    APP_VERSION       = "still-image-synthetic-v4"
+    APP_VERSION       = "deepfake-guard-v5"
     CKPT_DIR          = "./checkpoints"
     BEST_MODEL        = "./checkpoints/best_deepfake_model.pth"
 
@@ -389,6 +389,22 @@ class DeepfakeInference:
         model_synthetic = float(probs[1] + probs[2])
 
         if media_type == "image":
+            deepfake_guard = (
+                artifact_pct >= CFG.AI_ARTIFACT_PERCENT_THRESHOLD
+                and probs[0] < 0.15
+                and probs[1] >= 0.10
+            )
+            if deepfake_guard:
+                adjusted = probs.copy()
+                adjusted[1] = max(adjusted[1], 0.72)
+                adjusted[2] = min(adjusted[2], 0.22)
+                adjusted[0] = min(adjusted[0], 0.06)
+                adjusted = adjusted / np.sum(adjusted)
+                return adjusted, (
+                    f"Deepfake guard: low real match {probs[0] * 100:.1f}% "
+                    f"with face-manipulation signal {probs[1] * 100:.1f}%"
+                )
+
             should_override = (
                 artifact_pct >= CFG.AI_ARTIFACT_PERCENT_THRESHOLD
                 and probs[0] < 0.70
