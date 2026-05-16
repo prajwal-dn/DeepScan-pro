@@ -33,6 +33,8 @@ class CFG:
     AUX_AI_MODEL_ID   = "prithivMLmods/AI-vs-Deepfake-vs-Real-Siglip2"
     AUX_AI_MODEL      = "./hf_cache/hub/models--prithivMLmods--AI-vs-Deepfake-vs-Real-Siglip2/snapshots/4b0c6081b9c9d890cf0251d7a5e736adc10f2d49"
     AUX_AI_THRESHOLD  = 0.60
+    AI_ARTIFACT_THRESHOLD = 55.0
+    AI_SOFT_THRESHOLD = 0.30
 
 os.makedirs(CFG.CKPT_DIR, exist_ok=True)
 print(f"[INFO] Running on: {CFG.DEVICE}")
@@ -472,6 +474,16 @@ class DeepfakeInference:
 
             aux_prob = self.aux_ai.predict_rgb(img_rgb)
             final_probs, aux_debug = self._merge_auxiliary_ai(final_probs, aux_prob)
+
+            if (
+                final_probs[2] >= CFG.AI_SOFT_THRESHOLD
+                and fft_score >= CFG.AI_ARTIFACT_THRESHOLD
+                and final_probs[1] < 0.50
+            ):
+                final_probs[2] = max(final_probs[2], 0.72)
+                final_probs[0] = min(final_probs[0], 0.27)
+                final_probs[1] = min(final_probs[1], 0.08)
+                final_probs = final_probs / np.sum(final_probs)
             
             pred_class = int(np.argmax(final_probs))
             confidence = round(float(final_probs[pred_class]) * 100, 2)
