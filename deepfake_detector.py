@@ -20,8 +20,8 @@ class CFG:
     CKPT_DIR          = "./checkpoints"
     BEST_MODEL        = "./checkpoints/best_deepfake_model.pth"
 
-    BACKBONE          = "efficientnet_b3" # Kept at B3 for current model compatibility
-    IMG_SIZE          = 224 # Kept at 224 for current model compatibility
+    BACKBONE          = "efficientnet_b4" # Must match Kaggle training
+    IMG_SIZE          = 299               # Must match Kaggle training
     EPOCHS            = 20
     BATCH_SIZE        = 8 
     LR                = 1e-4
@@ -260,7 +260,8 @@ class DeepfakeInference:
             transforms.ToTensor(), transforms.Normalize((0.485,0.456,0.406),(0.229,0.224,0.225)),
         ])
         self.model = DeepfakeDetector(pretrained=False).to(self.device)
-        ckpt = torch.load(CFG.BEST_MODEL, map_location=self.device)
+        # Added weights_only=False to fix PyTorch 2.6+ loading issues
+        ckpt = torch.load(CFG.BEST_MODEL, map_location=self.device, weights_only=False)
         self.model.load_state_dict(ckpt["state_dict"])
         self.model.eval()
 
