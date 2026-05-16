@@ -377,7 +377,7 @@ async function logSequence(steps, baseDelay=350) {
 // Boot sequence on load
 window.addEventListener('load', () => {
     logSequence([
-        ['DeepScan PRO v2.4 initialized', 'SYS'],
+        ['DeepScan PRO ai-artifact-override-v3 initialized', 'SYS'],
         ['EfficientNet-B4 weights ready', 'OK'],
         ['MTCNN face detector loaded', 'OK'],
         ['FFT analyzer online', 'OK'],
@@ -442,9 +442,15 @@ async function analyze() {
 
         await new Promise(r => setTimeout(r, 400));
         addLog(`Verdict: ${d.verdict} — ${d.confidence}% certainty`, 'OK');
+        if (d.version) {
+            addLog(`Backend version: ${d.version}`, 'SYS');
+        }
         addLog(`Real: ${d.probs.real.toFixed(1)}%  Fake: ${d.probs.deepfake.toFixed(1)}%  AI: ${d.probs.ai_generated.toFixed(1)}%`, 'INFO');
         if (d.auxiliary_ai) {
             addLog(`SigLIP check: Real ${d.auxiliary_ai.real.toFixed(1)}%  Deepfake ${d.auxiliary_ai.deepfake.toFixed(1)}%  AI ${d.auxiliary_ai.ai_generated.toFixed(1)}%`, 'PROC');
+        }
+        if (d.decision_reason) {
+            addLog(d.decision_reason, 'WARN');
         }
         addLog('▬▬▬ SCAN COMPLETE ▬▬▬', 'SYS');
 

@@ -17,6 +17,7 @@ import tempfile
 class CFG:
     
     DATA_ROOT         = "./data"
+    APP_VERSION       = "ai-artifact-override-v3"
     CKPT_DIR          = "./checkpoints"
     BEST_MODEL        = "./checkpoints/best_deepfake_model.pth"
 
@@ -34,7 +35,8 @@ class CFG:
     AUX_AI_MODEL      = "./hf_cache/hub/models--prithivMLmods--AI-vs-Deepfake-vs-Real-Siglip2/snapshots/4b0c6081b9c9d890cf0251d7a5e736adc10f2d49"
     AUX_AI_THRESHOLD  = 0.60
     AI_ARTIFACT_THRESHOLD = 55.0
-    AI_SOFT_THRESHOLD = 0.30
+    AI_ARTIFACT_PERCENT_THRESHOLD = 85.0
+    AI_SOFT_THRESHOLD = 0.25
 
 os.makedirs(CFG.CKPT_DIR, exist_ok=True)
 print(f"[INFO] Running on: {CFG.DEVICE}")
@@ -376,6 +378,31 @@ class DeepfakeInference:
         }
         return merged, debug
 
+    def _artifact_percent(self, fft_score):
+        return round(float(min(100, max(0, (fft_score - 20) * 2.5))), 1)
+
+    def _apply_ai_artifact_override(self, probs, fft_score):
+        artifact_pct = self._artifact_percent(fft_score)
+        should_override = (
+            probs[2] >= CFG.AI_SOFT_THRESHOLD
+            and artifact_pct >= CFG.AI_ARTIFACT_PERCENT_THRESHOLD
+            and probs[1] < 0.50
+        )
+
+        if not should_override:
+            return probs, None
+
+        adjusted = probs.copy()
+        adjusted[2] = max(adjusted[2], 0.74)
+        adjusted[0] = min(adjusted[0], 0.24)
+        adjusted[1] = min(adjusted[1], 0.08)
+        adjusted = adjusted / np.sum(adjusted)
+
+        return adjusted, (
+            f"AI override: synthetic score {probs[2] * 100:.1f}% "
+            f"with artifact density {artifact_pct:.1f}%"
+        )
+
     def predict(self, path):
         ext = Path(path).suffix.lower()
         CLASSES = ["REAL", "DEEPFAKE", "AI_GENERATED"]
@@ -406,6 +433,7 @@ class DeepfakeInference:
             aux_prob = np.mean(aux_results, axis=0) if aux_results else None
             avg_prob, aux_debug = self._merge_auxiliary_ai(avg_prob, aux_prob)
             avg_fft = np.mean(fft_scores)
+            avg_prob, decision_reason = self._apply_ai_artifact_override(avg_prob, avg_fft)
             
             pred_class = int(np.argmax(avg_prob))
             confidence = round(float(avg_prob[pred_class]) * 100, 2)
@@ -431,6 +459,8 @@ class DeepfakeInference:
                 },
                 "metrics": metrics,
                 "auxiliary_ai": aux_debug,
+                "decision_reason": decision_reason,
+                "version": CFG.APP_VERSION,
                 "type": "video",
                 "frames_analyzed": len(probs)
             }
@@ -474,16 +504,7 @@ class DeepfakeInference:
 
             aux_prob = self.aux_ai.predict_rgb(img_rgb)
             final_probs, aux_debug = self._merge_auxiliary_ai(final_probs, aux_prob)
-
-            if (
-                final_probs[2] >= CFG.AI_SOFT_THRESHOLD
-                and fft_score >= CFG.AI_ARTIFACT_THRESHOLD
-                and final_probs[1] < 0.50
-            ):
-                final_probs[2] = max(final_probs[2], 0.72)
-                final_probs[0] = min(final_probs[0], 0.27)
-                final_probs[1] = min(final_probs[1], 0.08)
-                final_probs = final_probs / np.sum(final_probs)
+            final_probs, decision_reason = self._apply_ai_artifact_override(final_probs, fft_score)
             
             pred_class = int(np.argmax(final_probs))
             confidence = round(float(final_probs[pred_class]) * 100, 2)
@@ -496,7 +517,7 @@ class DeepfakeInference:
             metrics = {
                 "texture": round(min(100, tex_score / 15.0), 1),
                 "lighting": round(np.random.uniform(88, 98), 1) if pred_class == 0 else round(np.random.uniform(65, 85), 1),
-                "artifacts": round(min(100, (fft_score - 20) * 2.5), 1)
+                "artifacts": self._artifact_percent(fft_score)
             }
             
             return {
@@ -510,6 +531,8 @@ class DeepfakeInference:
                 "metrics": metrics,
                 "type": "image",
                 "auxiliary_ai": aux_debug,
+                "decision_reason": decision_reason,
+                "version": CFG.APP_VERSION,
                 "forensic_debug": {"fft": round(float(fft_score), 2), "tex": round(float(tex_score), 2)}
             }
 
@@ -522,6 +545,8 @@ def run_api():
     engine = DeepfakeInference()
     @app.route("/")
     def index(): return send_from_directory(".", "index.html")
+    @app.route("/health")
+    def health(): return jsonify({"ok": True, "version": CFG.APP_VERSION})
     @app.route("/predict", methods=["POST"])
     def predict():
         if "file" not in request.files:
