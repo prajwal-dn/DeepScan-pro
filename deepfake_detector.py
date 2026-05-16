@@ -17,7 +17,7 @@ import tempfile
 class CFG:
     
     DATA_ROOT         = "./data"
-    APP_VERSION       = "ai-artifact-override-v3"
+    APP_VERSION       = "still-image-synthetic-v4"
     CKPT_DIR          = "./checkpoints"
     BEST_MODEL        = "./checkpoints/best_deepfake_model.pth"
 
@@ -381,25 +381,42 @@ class DeepfakeInference:
     def _artifact_percent(self, fft_score):
         return round(float(min(100, max(0, (fft_score - 20) * 2.5))), 1)
 
-    def _apply_ai_artifact_override(self, probs, fft_score):
+    def _apply_ai_artifact_override(self, probs, fft_score, aux_debug=None, media_type="image"):
         artifact_pct = self._artifact_percent(fft_score)
-        should_override = (
-            probs[2] >= CFG.AI_SOFT_THRESHOLD
-            and artifact_pct >= CFG.AI_ARTIFACT_PERCENT_THRESHOLD
-            and probs[1] < 0.50
-        )
+        aux_ai = (aux_debug or {}).get("ai_generated", 0.0) / 100.0
+        aux_deepfake = (aux_debug or {}).get("deepfake", 0.0) / 100.0
+        aux_synthetic = aux_ai + aux_deepfake
+        model_synthetic = float(probs[1] + probs[2])
+
+        if media_type == "image":
+            should_override = (
+                artifact_pct >= CFG.AI_ARTIFACT_PERCENT_THRESHOLD
+                and probs[0] < 0.70
+                and (
+                    probs[2] >= CFG.AI_SOFT_THRESHOLD
+                    or model_synthetic >= 0.55
+                    or aux_synthetic >= 0.75
+                )
+            )
+        else:
+            should_override = (
+                probs[2] >= CFG.AI_SOFT_THRESHOLD
+                and artifact_pct >= CFG.AI_ARTIFACT_PERCENT_THRESHOLD
+                and probs[1] < 0.50
+            )
 
         if not should_override:
             return probs, None
 
         adjusted = probs.copy()
-        adjusted[2] = max(adjusted[2], 0.74)
+        adjusted[2] = max(adjusted[2], 0.78)
         adjusted[0] = min(adjusted[0], 0.24)
-        adjusted[1] = min(adjusted[1], 0.08)
+        adjusted[1] = min(adjusted[1], 0.12)
         adjusted = adjusted / np.sum(adjusted)
 
         return adjusted, (
-            f"AI override: synthetic score {probs[2] * 100:.1f}% "
+            f"AI override: still-image synthetic evidence "
+            f"{max(model_synthetic, aux_synthetic) * 100:.1f}% "
             f"with artifact density {artifact_pct:.1f}%"
         )
 
@@ -433,7 +450,12 @@ class DeepfakeInference:
             aux_prob = np.mean(aux_results, axis=0) if aux_results else None
             avg_prob, aux_debug = self._merge_auxiliary_ai(avg_prob, aux_prob)
             avg_fft = np.mean(fft_scores)
-            avg_prob, decision_reason = self._apply_ai_artifact_override(avg_prob, avg_fft)
+            avg_prob, decision_reason = self._apply_ai_artifact_override(
+                avg_prob,
+                avg_fft,
+                aux_debug=aux_debug,
+                media_type="video",
+            )
             
             pred_class = int(np.argmax(avg_prob))
             confidence = round(float(avg_prob[pred_class]) * 100, 2)
@@ -504,7 +526,12 @@ class DeepfakeInference:
 
             aux_prob = self.aux_ai.predict_rgb(img_rgb)
             final_probs, aux_debug = self._merge_auxiliary_ai(final_probs, aux_prob)
-            final_probs, decision_reason = self._apply_ai_artifact_override(final_probs, fft_score)
+            final_probs, decision_reason = self._apply_ai_artifact_override(
+                final_probs,
+                fft_score,
+                aux_debug=aux_debug,
+                media_type="image",
+            )
             
             pred_class = int(np.argmax(final_probs))
             confidence = round(float(final_probs[pred_class]) * 100, 2)
